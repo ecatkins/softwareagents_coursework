@@ -6,6 +6,8 @@ from scipy.spatial import distance
 import random
 import matplotlib.pyplot as plt
 import os
+import pickle
+import math
 
 
 
@@ -32,6 +34,7 @@ class Room:
         return self.room_array
         
     def print_room(self,current_location):
+        os.system('clear')
         room_image = self.room_array[:]
         table = PrettyTable()
         y,x = current_location
@@ -47,7 +50,9 @@ class Room:
 
 class Roomba:
     
-    def __init__(self, y_size, x_size, object_locations, can_locations, start_location = (0,0)):
+    def __init__(self, y_size, x_size, object_locations, can_locations, start_location = (0,0), show_room = True):
+        self.show_room = show_room
+
         # Define
         self.y_size = y_size
         self.x_size = x_size
@@ -56,6 +61,7 @@ class Roomba:
         self.start_location = start_location
         self.num_cans = len(can_locations)
         self.history = []
+        self.epsilon_history = []
 
         # Initialise
         self.room = Room(y_size, x_size, object_locations, can_locations)
@@ -165,7 +171,7 @@ class Roomba:
 
                 # if the robot goes back to the start location and all the cans are picked
                 # **** Think this might be buggy, doesn't account for if can sits right next to starting point on the way home
-                if to_location == start_location and all(to_canState[x] == 'picked' for x in to_canState) and dist == 1 and (len(shared_spots) == self.num_cans):
+                if to_location == self.start_location and all(to_canState[x] == 'picked' for x in to_canState) and dist == 1 and (len(shared_spots) == self.num_cans):
                     reward_matrix.iloc[from_index, to_index] = 5
 
         return reward_matrix
@@ -188,7 +194,10 @@ class Roomba:
         self.room = Room(self.y_size, self.x_size, self.object_locations, self.can_locations)
         y = self.current_location[0]
         x = self.current_location[1]
-        self.room.print_room(self.current_location)
+        
+        if self.show_room:
+            self.room.print_room(self.current_location)
+        
         self.current_state = self.find_start_state()
 
     def move(self,greedy = False):
@@ -224,7 +233,7 @@ class Roomba:
             chosen_index = random.choice(indexes)
             reward = self.reward_matrix.iloc[old_state,chosen_index]
 
-        # if random policy just choose one of possible
+        # if random policy just choose one of the possible
         # states at random
         else:
             chosen_index = random.choice(indexes)
@@ -236,7 +245,8 @@ class Roomba:
         self.current_location = self.possible_states[chosen_index]['current_location']
 
         # Update room and print
-        self.room.print_room(self.current_location)
+        if self.show_room:
+            self.room.print_room(self.current_location)
 
         # Assign new q value
         self.q_update(old_state, self.current_state, reward)
@@ -245,32 +255,33 @@ class Roomba:
 
     def q_update(self, old_state, new_state, immediate_reward):
         #########
-        gamma = 0.8
-        alpha = 0.9
+        gamma = self.gamma
+        alpha = self.alpha
         ########
         
         q_old = self.q_matrix.iloc[old_state,new_state]
         next_state_q = self.q_matrix.iloc[new_state,:]
-       
-        #### WRONG
-        q_new = q_old + alpha *(immediate_reward + gamma * max(next_state_q) - q_old)
-        print("Immediate Reward {}".format(immediate_reward))
-        print("Old q {}".format(q_old))
-        print("New q {}".format(q_new))
+        
+        q_new = q_old + alpha * (immediate_reward + gamma * max(next_state_q) - q_old)
+        
+        if self.show_room:
+            print("Immediate Reward {}".format(immediate_reward))
+            print("Old q {}".format(q_old))
+            print("New q {}".format(q_new))
+
         self.q_matrix.iloc[old_state, new_state] = q_new    
 
     def run_episode(self, start_location, epsilon):
         self.current_location = start_location
         self.number_steps = 0
-        os.system('clear')
         self.reset_episode()
         terminate = False
+        termination_steps = 100
         
         random_list = [True] * int(epsilon * 100) + [False] * int((1 - epsilon) * 100)
         
         while terminate == False:
             self.number_steps += 1
-            
             random_bool = random.choice(random_list)
             
             ### Chooses random move with epsilon probability
@@ -281,39 +292,122 @@ class Roomba:
             if reward == 5:
                 terminate = True
                 self.history.append(self.number_steps)
+                self.epsilon_history.append(epsilon)
                 self.number_steps = 0
 
-    def run_model(self, iterations):
-        epsilon = 0.95
-        start_location = (0,0)
-        iterative_step = epsilon / iterations
+            # ## Terminate if number of steps over
+            
+            # if self.number_steps == 100:
+            #     self.history.append(self.number_steps)
+            #     self.epsilon_history.append(epsilon)
+            #     terminate = True
+
+
+    def check_convergence(self):
+        # last  = self.history[-100:]
+        # last_Q75 = np.percentile(last,75)
+        # second_last = self.history[-200:-100]
+        # second_last_Q75 = np.percentile(second_last,75)
+        # if last_Q75 >= second_last_Q75:
+        #     return True
+        # else:
+        #     return 
+        last_five = self.history[-5:]
+        last = self.history[-1]
+        if last_five.count(last) >= 4 and last != 100:
+            return True
+        else:
+            return False
+
+
+
+    
+
+    def run_model(self, iterations, gamma, alpha, policy, plot):
+        self.gamma = gamma
+        self.alpha = alpha
+
+        start_epsilon = 0.95
+        end_epsilon = 0
         for x in range(iterations):
-            epsilon -= iterative_step
-            print("NEW EPISODE")
-            self.run_episode(start_location, epsilon)
+            if policy == 'linear':
+                epsilon = start_epsilon - x * (start_epsilon - end_epsilon) / iterations
+
+            elif policy == 'exponential5':
+                exp_factor = 5
+                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
+
+            elif policy =='exponential20':
+                exp_factor = 20
+                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
+
+            elif policy =='exponential50':
+                exp_factor = 50
+                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
+
+            elif policy == 'exponential100':
+                exp_factor = 100
+                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
+
+
+            print("NEW EPISODE ------> {}".format(x))
+            print("Epsilon {}".format(epsilon))
+            self.run_episode(self.start_location, epsilon)
+             
+
+            # if x > 10:
+            #     #Breaks the loop if convergence is reached
+            #     if self.check_convergence():
+            #       print("Convergence reached at {} iterations".format(x))
+            #       print("Epsilon value is {}".format(epsilon))
+            #       break
+
 
         x = [i for i in range(len(self.history))]
         y = self.history
         print(self.history)
         plt.plot(x,y)
-        plt.show()
+        if plot == True:
+            plt.show()
+
+        name = 'model' + str(round(gamma,1))[-2:] +'_' + str(round(alpha,2))[-2:] + '_' + str(policy)
+        model_run_description_string = "Gamma: {}, Alpha: {}, Policy: {}".format(gamma,alpha,policy)
+        model_run_parameters = {'gamma':gamma,'alpha':alpha,'policy':policy}
+        results = [name, model_run_description_string, model_run_parameters, self.history, self.epsilon_history]
+        return results
 
             
-# object_locations = ([1,1],[1,2])
-# can_locations = ([3,3], [4,4])
-object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2])
-# can_locations = ([7,1],[2,1],[4,4],[8,8])
-can_locations = ([7,1],[2,1])
-y_size = 10
-x_size = 10
-start_location = (0,0)
 
-roomba = Roomba(y_size = y_size, x_size = x_size, object_locations = object_locations, can_locations = can_locations)
+# object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2])
+# can_locations = ([7,1],[2,1])
+# y_size = 10
+# x_size = 10
+gamma_list = [0.1,0.5,0.9]
+alpha_list = [0.1,0.5,0.9]
+policy_list = ['exponential20','exponential100']
 
-roomba.run_model(1500)
+def grid_search(iterations, gamma_list, alpha_list, policy_list,plot=True):
+    object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2],[8,1],[2,8])
+    can_locations = ([2,1],[7,1],[7,7],[1,2],[7,2],[4,6])
+    y_size = 10
+    x_size = 10
+    start_location = (0,0)
 
 
+    for gamma in gamma_list:
+        for alpha in alpha_list:
+            for policy in policy_list:
+                roomba = Roomba(y_size = y_size, x_size = x_size, object_locations = object_locations, can_locations = can_locations, show_room = False)
+                results = roomba.run_model(iterations= iterations, gamma= gamma, alpha = alpha,policy = policy,plot=False)
+                pickle.dump(results, open('pickles/{}.p'.format(results[0]), 'wb'))
 
 
+grid_search(200,gamma_list, alpha_list,policy_list,plot=False)
+
+
+#### Measurements
+# 1. Value converged to
+# 2. Total number steps to converge
+# 3. Episodes to converge
 
 
