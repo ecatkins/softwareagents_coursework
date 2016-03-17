@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-mypath = os.getcwd() + '/pickles'
+mypath = os.getcwd() + '/pickles2'
 
 onlyfiles = [f for f in listdir(mypath) if isfile(join(mypath, f))]
 
