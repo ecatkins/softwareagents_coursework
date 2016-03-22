@@ -33,10 +33,10 @@ lasts = []
 
 
 for file in onlyfiles:
-	open_list = pickle.load(open('pickles/' + file, 'rb'))
+	open_list = pickle.load(open('pickles2/' + file, 'rb'))
 	parameters = open_list[2]
-	if parameters['policy'] == 'exponential20':
-	#if True:
+	# if parameters['policy'] == 'exponential20':
+	if True:
 		print('here')
 		legend = open_list[1]
 		legends_all.append(legend)

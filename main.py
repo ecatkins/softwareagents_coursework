@@ -201,7 +201,7 @@ class Roomba:
         
         self.current_state = self.find_start_state()
 
-    def move(self,greedy = False, policy2=None):
+    def move(self, policy, epsilon, temperature):
         y = self.current_location[0]
         x = self.current_location[1]
 
@@ -221,47 +221,42 @@ class Roomba:
         #Given FROM state, choose all moves in TO state
         # in Q matrix
         all_moves_q = self.q_matrix.iloc[old_state,:]
+        valid_moves_q = all_moves_q[all_moves_r != '.']
         q_max_move = max(all_moves_q)
 
-        # if greedy policy
-        if greedy:
+        
+        
+        ### e-reedy policy
+        if policy == 'egreedy':
+            random_bool = np.random.choice([True,False], p = [epsilon, 1 - epsilon])
+
+            ### Action picked at random according to epsilon
+            if random_bool:
+                chosen_index = random.choice(indexes)
+                reward = possible_moves.ix[chosen_index]
             
-            # If all possible moves are zero, pick a random move
-            if q_max_move == 0:
-                return self.move(greedy=False)
-            
-            # Pick the best moves
-            max_move_series = all_moves_q[all_moves_q == q_max_move]
-            
-            # There might be more than one so pick at random
-            indexes = max_move_series.index
-            chosen_index = random.choice(indexes)
-            reward = self.reward_matrix.iloc[old_state,chosen_index]
+            # Otherwise go the greedy policy
+            else:
+                max_move_series = valid_moves_q[valid_moves_q == q_max_move]
+                # There might be more than one so pick at random
+                indexes = max_move_series.index
+                chosen_index = random.choice(indexes)
+                reward = self.reward_matrix.iloc[old_state,chosen_index]
 
 
-       
-        ## Implement a softmax policy
-        elif policy2 == 'softmax':
+        ## softmax policy
+        elif policy == 'softmax':
             # pdb.set_trace()
-            temperature = 0.7
-            valid_moves_q = all_moves_q[all_moves_r != '.']
-
-            sum_probs = np.sum([math.exp(i/temperature) for i in valid_moves_q])
-            all_probs = [math.exp(i/temperature) /sum_probs for i in valid_moves_q]
+            
+            individual_probs = [math.exp(i/temperature) if i / temperature < 100 else math.exp(100) for i in valid_moves_q]
+            sum_probs = np.sum(individual_probs)
+            all_probs = [i / sum_probs for i in individual_probs]
             weighted_random_choice = np.random.choice(valid_moves_q, p=all_probs)
             matching_moves = valid_moves_q[valid_moves_q == weighted_random_choice]
             indexes = matching_moves.index
             chosen_index = random.choice(indexes)
             reward = self.reward_matrix.iloc[old_state, chosen_index]
-
-
-        # if random policy just choose one of the possible
-        # states at random
-        else:
-            chosen_index = random.choice(indexes)
-            reward = possible_moves.ix[chosen_index]
         
-
         # Assign new current state and current location
         self.current_state = chosen_index
         self.current_location = self.possible_states[chosen_index]['current_location']
@@ -293,24 +288,29 @@ class Roomba:
 
         self.q_matrix.iloc[old_state, new_state] = q_new    
 
-    def run_episode(self, start_location, epsilon, policy2):
+    def run_episode(self, start_location, policy, epsilon = None, temperature = None):
+        ## Policy factor is epsilon or temperature
+
         self.current_location = start_location
         self.number_steps = 0
         self.reset_episode()
         terminate = False
         termination_steps = 100
         
-        random_list = [True] * int(epsilon * 100) + [False] * int((1 - epsilon) * 100)
         
+
         while terminate == False:
             self.number_steps += 1
-            random_bool = random.choice(random_list)
             
-            ### Chooses random move with epsilon probability
-            if random_bool:
-                reward = self.move(greedy = False, policy2 = policy2)
-            else:
-                reward = self.move(greedy = True, policy2 = policy2)   
+            
+
+            reward = self.move(policy=policy, epsilon = epsilon, temperature=temperature)
+
+            
+            
+         
+
+            # If the agent reaches home
             if reward == 5:
                 terminate = True
                 self.history.append(self.number_steps)
@@ -345,48 +345,20 @@ class Roomba:
 
     
 
-    def run_model(self, iterations, gamma, alpha, policy, policy_start, policy_decay, plot):
+    def run_model(self, iterations, gamma, alpha, policy, epsilon_start, epsilon_decay, temperature, plot):
+        
+        print("Gamma: {} Alpha: {} Policy {} Epsilon Start {} Epsilon Decay {}".format(gamma,alpha, policy, epsilon_start, epsilon_decay))
         self.gamma = gamma
         self.alpha = alpha
 
-        start_epsilon = 0.95
-
-
-        policy_fac = policy_start
-
         for x in range(iterations):
-            policy_factor = policy_start - x *  math.exp(- policy_decay * x)
-
+            epsilon = epsilon_start *  math.exp(-epsilon_decay * x)
 
        
-        for x in range(iterations):
-            if policy == 'linear':
-                epsilon = start_epsilon - x * (start_epsilon - end_epsilon) / iterations
-
-            elif policy == 'exponential5':
-                exp_factor = 5
-                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
-
-            elif policy =='exponential20':
-                exp_factor = 20
-                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
-
-            elif policy =='exponential50':
-                exp_factor = 50
-                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
-
-            elif policy == 'exponential100':
-                exp_factor = 100
-                epsilon = start_epsilon * math.exp(- exp_factor / iterations * x)
-
-            if p
-
-
             print("NEW EPISODE ------> {}".format(x))
             print("Epsilon {}".format(epsilon))
-            self.run_episode(self.start_location, epsilon, policy2 = policy2)
+            self.run_episode(self.start_location, policy, epsilon, temperature)
              
-
             # if x > 10:
             #     #Breaks the loop if convergence is reached
             #     if self.check_convergence():
@@ -397,16 +369,27 @@ class Roomba:
 
         x = [i for i in range(len(self.history))]
         y = self.history
-        print(self.history)
         plt.plot(x,y)
+        plt.xlabel('Episodes')
+        plt.ylabel('Number of steps to terminal state')
+        
+
+        total_steps = sum(self.history)
+        print("Total steps taken {}".format(total_steps))
+        print("History")
+        print(self.history)
+        name = 'model' + str(round(gamma,1))[-2:] +'_' + str(round(alpha,2))[-2:] + '_' + str(policy) + '_'  + str(epsilon_start)  + str(epsilon_decay)
+        model_run_description_string = "Gamma: {}, Alpha: {}, Policy: {}, Epsilon Start: {}, Epsilon Decay: {}".format(gamma,alpha,policy, epsilon_start, epsilon_decay)
+        model_run_parameters = {'gamma':gamma,'alpha':alpha,'policy':policy,'epsilon_start':epsilon_start,'epsilon_decay':epsilon_decay}
+        results = [name, model_run_description_string, model_run_parameters, self.history, self.epsilon_history]
+        
         if plot == True:
             plt.show()
 
-        name = 'model' + str(round(gamma,1))[-2:] +'_' + str(round(alpha,2))[-2:] + '_' + str(policy)
-        model_run_description_string = "Gamma: {}, Alpha: {}, Policy: {}, Policy2: {}".format(gamma,alpha,policy, policy2)
-        model_run_parameters = {'gamma':gamma,'alpha':alpha,'policy':policy}
-        results = [name, model_run_description_string, model_run_parameters, self.history, self.epsilon_history]
+
         return results
+
+
 
             
 
@@ -414,35 +397,37 @@ class Roomba:
 # can_locations = ([7,1],[2,1])
 # y_size = 10
 # x_size = 10
-gamma_list = [0.9]
-alpha_list = [0.9]
-policy_list = ['egreedy','softmax']
-policy_start_list = [0.95,0.5,0.1]
-policy_decay_list = [20,50]
+gamma_list = [0.5]
+alpha_list = [0.5]
+policy_list = ['egreedy']
+epsilon_start_list = [0.1]
+epsilon_decay_list = [0]
+temperature_list = [0.0005]
 
-def grid_search(iterations, gamma_list, alpha_list, policy_list,plot=True):
-    # object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2],[8,1],[2,8])
-    # can_locations = ([2,1],[7,1],[7,7],[1,2],[7,2],[4,6])
-    # y_size = 10
-    # x_size = 10
-
-    object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2])
-    can_locations = ([7,1],[2,1])
+def grid_search(iterations, gamma_list, alpha_list, policy_list, epsilon_start_list, epsilon_decay_list, temperature_list, plot=True):
+    object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[7,6],[8,9],[5,2],[6,2],[8,1],[2,8])
+    can_locations = ([7,1],[7,7],[1,2],[7,2],[9,8],[6,4])
     y_size = 10
     x_size = 10
+
+    # object_locations = ([3,2],[3,3],[3,4],[3,5],[3,6],[4,2],[5,2],[6,2])
+    # can_locations = ([7,1],[2,1])
+    # y_size = 10
+    # x_size = 10
     start_location = (0,0)
 
     for gamma in gamma_list:
         for alpha in alpha_list:
             for policy in policy_list:
-                for policy_start in policy_start_list:
-                    for policy_decay in policy_decay_list:
-                        roomba = Roomba(y_size = y_size, x_size = x_size, object_locations = object_locations, can_locations = can_locations, show_room = False)
-                        results = roomba.run_model(iterations= iterations, gamma= gamma, alpha = alpha,policy = policy,policy_start= policy_start,policy_decay = policy_decay, plot=False)
-                        pickle.dump(results, open('pickles2/{}.p'.format(results[0]), 'wb'))
+                for epsilon_start in epsilon_start_list:
+                    for epsilon_decay in epsilon_decay_list:
+                        for temperature in temperature_list:
+                            roomba = Roomba(y_size = y_size, x_size = x_size, object_locations = object_locations, can_locations = can_locations, show_room = False)
+                            results = roomba.run_model(iterations= iterations, gamma = gamma, alpha = alpha, policy = policy,epsilon_start= epsilon_start,epsilon_decay = epsilon_decay, temperature = temperature, plot = plot)
+                            pickle.dump(results, open('pickles2/{}.p'.format(results[0]), 'wb'))
+                            
 
-
-grid_search(200,gamma_list, alpha_list,policy_list,plot=False)
+grid_search(150,gamma_list, alpha_list,policy_list, epsilon_start_list, epsilon_decay_list,temperature_list,plot=True)
 
 
 #### Measurements
